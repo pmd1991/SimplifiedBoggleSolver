@@ -1,230 +1,275 @@
-using System;
+﻿using System;
 using System.Collections.Generic;
-using System.Linq;
 using System.Text;
 using System.IO;
 using System.Diagnostics;
+using System.Threading.Tasks;
+using System.Collections.Concurrent;
 
 namespace BoggleSolver
 {
-    class Guess
+    /// <summary>
+    /// describes locations on grid of possible word
+    /// </summary>
+    sealed class Guess
     {
-        private int _x;
-        private int _y;
-        private int _dir;
-        private int[] _charIndexes;
+        public byte X { get; set; }
+        public byte Y { get; set; }
+        public byte Dir { get; set; }
+        public byte[] CharIndexes { get; set; }
+        public short Index { get; set; }
 
-        public Guess(int x, int y, int dir, int len, int[] charIndexes)
+        public Guess(byte x, byte y, byte dir, byte[] charIndexes, short index)
         {
-            _x = x;
-            _y = y;
-            _dir = dir;
-            Len = len;
-            _charIndexes = charIndexes;
+            X = x;
+            Y = y;
+            Dir = dir;
+            CharIndexes = charIndexes;
+            Index = index;
         }
 
-        public int LineNum { get; set; }
-        public int GameNum { get; set; }
-        public string Word { get; set; }
-        public int Len { get; set; }
- 
-        public string ReadWord(string board)
+        public override string ToString()
         {
-            StringBuilder builder = new StringBuilder();
-
-            foreach (int i in _charIndexes)
-            {
-                builder.Append(board[i]);
-            }
-            Word = builder.ToString();
-
-            return Word;
-        }
-
-        public string Report()
-        {
-            return String.Format("{0} {1} {2} {3} {4} {5}", Word, LineNum, Len, _x, _y, _dir);
+            return string.Format("x={0,2} y={1,2} dir={2,2} dir_max={3,2}", X, Y, Dir, CharIndexes.Length);
         }
     }
 
-    class Board
+    /// <summary>
+    /// set of 25 letters and operations on them
+    /// </summary>
+    sealed class Grid
     {
-        public Board(string board, int num)
+        class ValidWords
         {
-            Grid = board;
+            public short LineNum { get; set; }
+            public string Word { get; set; }
+            public Guess Guess { get; set; }
+            public byte Score { get; set; }
+
+            public ValidWords(short lineNum, string word, Guess guess, byte score)
+            {
+                LineNum = lineNum;
+                Word = word;
+                Guess = guess;
+                Score = score;
+            }
+        }
+        string Letter { get; set; }
+        int GameNum { get; set; }
+        ValidWords[] validWords;
+
+        public Grid(string letter, int num)
+        {
+            Letter = letter;
             GameNum = num;
         }
 
-        public string Grid { get; set; }
-        public int GameNum { get; set; }
-    }
-
-    class Games
-    {
-        List<Board> _boardList;
-        enum Dir { First = 1, North = 1, NorthEast = 2, East = 3, SouthEast = 4, South = 5,
-            SouthWest = 6, West = 7, NorthWest = 8, Last=9 };
-        const int LastY = 5;
-        const int LastX = 5;
-        WordList _wordList;
-        const int InvalidGameNum = 0;
-
-        public Games(string[] lines, WordList wordList)
+        public void Score(Guess[] guesses, WordList validList)
         {
-            int gameNum = 1;
+            validWords = new ValidWords[guesses.Length * Solver.MaxWordLen];
+            StringBuilder builder = new StringBuilder();
 
-            _boardList = new List<Board>();
-            foreach (string game in lines)
+            foreach (Guess guess in guesses)
             {
-                if (game != game.ToUpper())
-                    throw new FormatException("Error with board: " + game);
+                bool afterQ = false;
+                builder.Clear();
+                int current = 0;
+                short lineNum = 0;
+                bool addUToScore = false;
 
-                _boardList.Add(new Board(game, gameNum));
-                gameNum++;
-            }
-            _wordList = wordList;
-        }
-
-        bool IsInRange(int x, int y)
-        {
-            return x >= 0 && x < LastX && y >= 0 && y < LastY;
-        }
-
-        IEnumerable<Guess> Permute()
-        {
-            for (int y = 0; y < LastY; y++)
-            {
-                for (int x = 0; x < LastX; x++)
+                for (byte charIndex = 0; charIndex < guess.CharIndexes.Length; charIndex++)
                 {
-                    for (Dir dir = Dir.First; dir < Dir.Last; dir++)
-                    {
-                        List<int> charIndexes = new List<int>();
-                        int nextX = x;
-                        int nextY = y;
+                    char ch = Letter[guess.CharIndexes[charIndex]];
 
-                        for (int len = 1; len <= 5; len++)
+                    if (ch == 'U' && afterQ)
+                    {
+                        builder.Append(ch); 
+                        addUToScore = false;
+                        continue;
+                    }
+                    afterQ = false;
+                    if (builder.Length == 5 ||
+                        (addUToScore && builder.Length == 4))
+                        break;
+                    else
+                    {
+                        builder.Append(ch);
+                        bool hasScore = validList.Contains(ch, current, out lineNum, out current);
+                        if (ch == 'Q' && !addUToScore && builder.Length < 5)
                         {
-                            charIndexes.Add(nextX + nextY*LastY);
-                            yield return new Guess(x, y, (int)dir, len, charIndexes.ToArray());
-                            if (!MoveToNextGuess(dir, ref nextX, ref nextY))
-                                break;
+                            hasScore = validList.Contains('U', current, out lineNum, out current);
+                            afterQ = true;
+                            addUToScore = true;
+                        }
+                        if (hasScore)
+                        {
+                            string validWord = builder.ToString();
+                            byte score = (byte)(addUToScore ? validWord.Length + 1 : validWord.Length);
+                            validWords[guess.Index * 5 + charIndex] = new ValidWords(lineNum, validWord, guess, score);
                         }
                     }
                 }
             }
         }
 
-        private bool MoveToNextGuess(Dir dir, ref int nextX, ref int nextY)
+        public int Report(StringBuilder outputBuffer)
         {
-            switch (dir)
+            int score = 0;
+            outputBuffer.AppendLine(string.Format("Game {0}", GameNum));
+            foreach (ValidWords pair in validWords)
             {
-                case Dir.North:
-                    nextY--;
-                    break;
-                case Dir.NorthEast:
-                    nextY--;
-                    nextX++;
-                    break;
-                case Dir.East:
-                    nextX++;
-                    break;
-                case Dir.SouthEast:
-                    nextX++;
-                    nextY++;
-                    break;
-                case Dir.South:
-                    nextY++;
-                    break;
-                case Dir.SouthWest:
-                    nextX--;
-                    nextY++;
-                    break;
-                case Dir.West:
-                    nextX--;
-                    break;
-                case Dir.NorthWest:
-                    nextX--;
-                    nextY--;
-                    break;
-                default:
-                    throw new ArgumentException();
-            }
-            return IsInRange(nextX, nextY);
-        }
-
-        public void ScoreGames()
-        {
-            IEnumerable<Guess> validWords = from game in _boardList.AsParallel() orderby game.GameNum
-                                       from guess in Permute().AsParallel()
-                                       where _wordList.TestAndSetWord(guess, game)
-                                       select guess;
-
-            int totalScore = 0;
-            int lastGameNum = InvalidGameNum;
-            int gameScore = 0;
-
-            foreach (Guess guess in validWords)
-            {
-                if (lastGameNum != guess.GameNum)
+                if (pair != null)
                 {
-                    if (lastGameNum != InvalidGameNum)
-                    {
-                        Console.WriteLine("Total Game Points = {0}", gameScore);
-                    }
-                    Console.WriteLine("Game {0}", guess.GameNum);
-                    lastGameNum = guess.GameNum;
-                    gameScore = 0;
+                    outputBuffer.AppendLine(String.Format("{0} {1} {2} {3} {4} {5}",
+                        pair.Word, pair.LineNum, pair.Score, pair.Guess.X, pair.Guess.Y, pair.Guess.Dir));
+                    score += pair.Score;
                 }
-                Console.WriteLine(guess.Report());
-                gameScore += guess.Len;
-                totalScore += guess.Len;
             }
-            Console.Write("Games Totals Points = {0} ", totalScore);
+            outputBuffer.AppendLine(string.Format("Total Game Points = {0}", score));
+            return score;
         }
     }
 
-    class WordList
+    /// <summary>
+    /// collection of grids
+    /// </summary>
+    sealed class Solver
     {
-        static short[] _lineInfo = new short[26 * 26 * 26 * 26 * 26 * 26 + 1];
+        public const int MaxWordLen = 5;
+        const int MinWordLength = 2;
+        const byte LastY = 5;
+        const byte LastX = 5;
+        const int InvalidGameNum = 0;
+        enum Dir { First = 1, Last = 9 };
+        static readonly Guess[] _guesses = new Guess[144];
+        static readonly short[,] DirOffset = { { 0, -1 }, { 1, -1 }, 
+                                               { 1,  0 }, 
+                                               { 1,  1 }, { 0, 1 }, { -1, 1 }, { -1, 0 }, { -1, -1 } };
+        readonly WordList _wordList;
+        List<Grid> _gridList;
+
+        public Solver(string[] lines, WordList wordList)
+        {
+            int gameNum = 1;
+
+            _gridList = new List<Grid>();
+            foreach (string game in lines)
+            {
+                if (game.Length < 25)
+                    continue;
+
+                _gridList.Add(new Grid(game, gameNum));
+                gameNum++;
+            }
+            _wordList = wordList;
+            MakeGuesses();
+        }
+
+        private bool IsInRange(int x, int y)
+        {
+            return x >= 0 && x < LastX && y >= 0 && y < LastY;
+        }
+
+        private void MakeGuesses()
+        {
+            short ordinal = 0;
+
+            for (byte y = 0; y < LastY; y++)
+            {
+                for (byte x = 0; x < LastX; x++)
+                {
+                    for (Dir dir = Dir.First; dir < Dir.Last; dir++)
+                    {
+                        List<byte> charIndexes = new List<byte>();
+                        short nextX = x;
+                        short nextY = y;
+                        byte len;
+
+                        for (len = 1; len <= 5; len++)
+                        {
+                            charIndexes.Add((byte)(nextX + nextY * LastY));
+                            nextX += DirOffset[(int)dir - 1, 0];
+                            nextY += DirOffset[(int)dir - 1, 1];
+                            if (!IsInRange(nextX, nextY))
+                                break;
+                        }
+                        if (len >= MinWordLength)
+                        {
+                            _guesses[ordinal] = new Guess(x, y, (byte)dir, charIndexes.ToArray(), ordinal);
+                            ordinal++;
+                        }
+                    }
+                }
+            }
+        }
+
+        public void ScoreGames(StringBuilder outputBuffer)
+        {
+            Parallel.ForEach<Tuple<int, int>>(Partitioner.Create(0, _gridList.Count), range =>
+            {
+                for (int i = range.Item1; i < range.Item2; i++)
+                    _gridList[i].Score(_guesses, _wordList);
+            });
+
+            int totalScore = 0;
+
+            foreach (Grid grid in _gridList)
+            {
+                totalScore += grid.Report(outputBuffer);
+            }
+            outputBuffer.AppendLine(string.Format("Games Totals Points = {0} ", totalScore));
+        }
+    }
+
+    /// <summary>
+    /// list of valid words from external dictionary file
+    /// </summary>
+    sealed class WordList
+    {
+        static readonly short[] table = new short[27 * 27 * 27 * 27 * 27];
 
         public WordList(string[] lines)
         {
-            short lineNum = 1;
-
-            foreach (string word in lines)
+            Parallel.ForEach<Tuple<int, int>>(Partitioner.Create(0, lines.Length), range =>
             {
-                if (word != word.ToUpper())
-                    throw new FormatException("Error with dictionary: " + word);
-
-                int hashCode = Hash(word);
-
-                _lineInfo[hashCode] = lineNum;
-                lineNum++;
-            }
+                for (int line = range.Item1; line < range.Item2; line++)
+                {
+                    table[Hash(lines[line])] = (short)(line + 1);
+                }
+            });
         }
 
-        public bool TestAndSetWord(Guess word, Board board)
+        private int Hash(string word)
         {
-            int hashCode = Hash(word.ReadWord(board.Grid));
- 
-            word.LineNum = _lineInfo[hashCode];
-            word.GameNum = board.GameNum;
-
-            return word.LineNum != 0;
-        }
-
-        int Hash(string word)
-        {
-            int result = 0;
+            int hashCode = 0;
 
             foreach (char c in word)
             {
-                result = result * 26 + Convert.ToInt32(c) - Convert.ToInt32('A') + 1;
+                hashCode = hashCode * 27 + (int)c - (int)'A' + 1;
             }
-            return result;
+            return hashCode;
+        }
+
+        public bool Contains(char ch, int current, out short lineNum, out int next)
+        {
+            next = current * 27 + (int)ch - (int)'A' + 1;
+
+            if (table[next] != 0)
+            {
+                lineNum = table[next];
+                return true;
+            }
+            else
+            {
+                lineNum = 0;
+                return false;
+            }
         }
     }
 
+    /// <summary>
+    /// main entry
+    /// </summary>
     class Program
     {
         static void Main(string[] args)
@@ -233,28 +278,28 @@ namespace BoggleSolver
             string[] words = File.ReadAllLines("words5.txt");
 
             Stopwatch stopwatch = new Stopwatch();
-            const int TIMING_REPETITIONS = 10;
+            const int TIMING_REPETITIONS = 800;
             double averageTime = 0.0;
+            StringBuilder output = new StringBuilder();
 
             for (int i = 0; i < TIMING_REPETITIONS; ++i)
             {
                 stopwatch.Reset();
                 stopwatch.Start();
 
+                output.Clear();
                 WordList wordList = new WordList(words);
-                Games games = new Games(gameLines, wordList);
-                games.ScoreGames();
+                Solver games = new Solver(gameLines, wordList);
+                games.ScoreGames(output);
 
                 stopwatch.Stop();
+
                 averageTime += stopwatch.Elapsed.TotalSeconds;
                 GC.Collect();
             }
             averageTime /= (double)TIMING_REPETITIONS;
-            Console.WriteLine(string.Format("Total Average Time = {0:0.000000} sec", averageTime));
-
-            Console.ReadLine();
+            output.AppendLine(string.Format("Total Average Time = {0:0.000000} sec", averageTime));
+            File.WriteAllText("results.txt", output.ToString());
         }
     }
 }
-
-  
