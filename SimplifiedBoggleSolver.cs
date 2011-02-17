@@ -1,10 +1,11 @@
-﻿using System;
+using System;
 using System.Collections.Generic;
 using System.Text;
 using System.IO;
 using System.Diagnostics;
 using System.Threading.Tasks;
 using System.Collections.Concurrent;
+using System.Linq;
 
 namespace BoggleSolver
 {
@@ -39,25 +40,11 @@ namespace BoggleSolver
     /// </summary>
     sealed class Grid
     {
-        class ValidWords
-        {
-            public short LineNum { get; set; }
-            public string Word { get; set; }
-            public Guess Guess { get; set; }
-            public byte Score { get; set; }
-
-            public ValidWords(short lineNum, string word, Guess guess, byte score)
-            {
-                LineNum = lineNum;
-                Word = word;
-                Guess = guess;
-                Score = score;
-            }
-        }
         string Letter { get; set; }
         int GameNum { get; set; }
-        ValidWords[] validWords;
-
+        StringBuilder output = new StringBuilder();
+        public int TotalScore { get; set; }
+       
         public Grid(string letter, int num)
         {
             Letter = letter;
@@ -66,7 +53,7 @@ namespace BoggleSolver
 
         public void Score(Guess[] guesses, WordList validList)
         {
-            validWords = new ValidWords[guesses.Length * Solver.MaxWordLen];
+            TotalScore = 0;
             StringBuilder builder = new StringBuilder();
 
             foreach (Guess guess in guesses)
@@ -105,7 +92,9 @@ namespace BoggleSolver
                         {
                             string validWord = builder.ToString();
                             byte score = (byte)(addUToScore ? validWord.Length + 1 : validWord.Length);
-                            validWords[guess.Index * 5 + charIndex] = new ValidWords(lineNum, validWord, guess, score);
+                            output.AppendLine(String.Join(" ", validWord,
+                                lineNum, score, guess.X, guess.Y, guess.Dir));
+                            TotalScore += score;
                         }
                     }
                 }
@@ -114,19 +103,10 @@ namespace BoggleSolver
 
         public int Report(StringBuilder outputBuffer)
         {
-            int score = 0;
             outputBuffer.AppendLine(string.Format("Game {0}", GameNum));
-            foreach (ValidWords pair in validWords)
-            {
-                if (pair != null)
-                {
-                    outputBuffer.AppendLine(String.Format("{0} {1} {2} {3} {4} {5}",
-                        pair.Word, pair.LineNum, pair.Score, pair.Guess.X, pair.Guess.Y, pair.Guess.Dir));
-                    score += pair.Score;
-                }
-            }
-            outputBuffer.AppendLine(string.Format("Total Game Points = {0}", score));
-            return score;
+            outputBuffer.Append(output.ToString());
+            outputBuffer.AppendLine(string.Format("Total Game Points = {0}", TotalScore));
+            return TotalScore;
         }
     }
 
@@ -212,7 +192,6 @@ namespace BoggleSolver
             });
 
             int totalScore = 0;
-
             foreach (Grid grid in _gridList)
             {
                 totalScore += grid.Report(outputBuffer);
